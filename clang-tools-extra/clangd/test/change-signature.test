@@ -28,6 +28,15 @@
 # CHECK: "id": 4,
 # CHECK: "error": "Cannot remove a parameter used in a function body",
 ---
-{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+{"jsonrpc":"2.0","id":5,"method":"command/resolve","params":{"command":"refactor.changeSignature","arguments":[{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":0,"character":4},"version":"1"}],"formAnswers":[{"id":"signature","value":"{\"name\":\"calculate\",\"returnType\":\"const char *\",\"parameters\":[{\"oldIndex\":0,\"name\":\"x\",\"type\":\"int\"},{\"oldIndex\":1,\"name\":\"y\",\"type\":\"int\"}]}"}],"force":true}}
+# CHECK: "id": 5,
+# CHECK: "force": true,
+---
+{"jsonrpc":"2.0","id":6,"method":"workspace/executeCommand","params":{"command":"refactor.changeSignature","arguments":[{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":0,"character":4},"version":"1","answer":"{\"name\":\"calculate\",\"returnType\":\"const char *\",\"parameters\":[{\"oldIndex\":0,\"name\":\"x\",\"type\":\"int\"},{\"oldIndex\":1,\"name\":\"y\",\"type\":\"int\"}]}","force":true}]}}
+# CHECK: "id": 6,
+# CHECK: "newText": "const char *",
+# CHECK: "The proposed signature does not compile in
+---
+{"jsonrpc":"2.0","id":7,"method":"shutdown"}
 ---
 {"jsonrpc":"2.0","method":"exit"}

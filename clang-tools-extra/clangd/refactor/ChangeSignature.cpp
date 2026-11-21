@@ -622,7 +622,7 @@ llvm::Expected<llvm::json::Value>
 changeSignature(ParsedAST &AST, const ParseInputs &Inputs,
                 const GlobalCompilationDatabase &CDB, const ThreadsafeFS &FS,
                 const SymbolIndex *Index, Position Pos,
-                std::optional<llvm::StringRef> Answer) {
+                std::optional<llvm::StringRef> Answer, bool Force) {
   const FunctionDecl *Target = signatureTarget(AST, Pos);
   if (!Target)
     return reject("Select a supported function or method");
@@ -682,6 +682,11 @@ changeSignature(ParsedAST &AST, const ParseInputs &Inputs,
       return reject("Cannot resolve an indexed file: " + *Unresolved);
   }
 
+  llvm::json::Array Warnings{
+      "Only visible declarations and indexed references are included. "
+      "External or inactive callers may need changes.",
+      "Review type and return changes and rebuild affected translation "
+      "units after applying."};
   auto Parse = [&](PathRef File, const ParseInputs &Input,
                    bool IsPreview) -> llvm::Expected<ParsedAST> {
     if (isCancelled())
@@ -694,13 +699,20 @@ changeSignature(ParsedAST &AST, const ParseInputs &Inputs,
                                    Diagnostics.take(), nullptr);
     if (!Parsed)
       return reject("Cannot parse referred translation unit " + File);
-    for (const Diag &Diagnostic : Parsed->getDiagnostics())
-      if (Diagnostic.Severity >= DiagnosticsEngine::Error)
-        return reject(
-            (IsPreview
-                 ? "The proposed signature does not compile in "
-                 : "Cannot resolve references because of a compile error in ") +
-            File + ": " + Diagnostic.Message);
+    for (const Diag &Diagnostic : Parsed->getDiagnostics()) {
+      if (Diagnostic.Severity < DiagnosticsEngine::Error)
+        continue;
+      std::string Message =
+          ((IsPreview
+                ? "The proposed signature does not compile in "
+                : "Cannot resolve references because of a compile error in ") +
+           File + ": " + Diagnostic.Message)
+              .str();
+      if (!IsPreview || !Force)
+        return reject(Message);
+      Warnings.insert(Warnings.begin(), std::move(Message));
+      break;
+    }
     return std::move(*Parsed);
   };
 
@@ -769,12 +781,7 @@ changeSignature(ParsedAST &AST, const ParseInputs &Inputs,
   return llvm::json::Object{
       {"edit", llvm::json::Object{{"changes", std::move(Edits)}}},
       {"originals", std::move(Originals)},
-      {"warnings",
-       llvm::json::Array{
-           "Only visible declarations and indexed references are included. "
-           "External or inactive callers may need changes.",
-           "Review type and return changes and rebuild affected translation "
-           "units after applying."}}};
+      {"warnings", std::move(Warnings)}};
 }
 
 } // namespace clang::clangd

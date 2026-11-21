@@ -766,10 +766,10 @@ void ClangdServer::codeAction(const CodeActionInputs &Params,
 void ClangdServer::changeSignature(PathRef File, Position Pos,
                                    llvm::StringRef Version,
                                    std::optional<std::string> Answer,
-                                   Callback<llvm::json::Value> CB) {
+                                   bool Force, Callback<llvm::json::Value> CB) {
   WorkScheduler->runWithAST(
       "ChangeSignature", File,
-      [this, Pos, Version = Version.str(), Answer = std::move(Answer),
+      [this, Pos, Version = Version.str(), Answer = std::move(Answer), Force,
        CB = std::move(CB)](llvm::Expected<InputsAndAST> Inputs) mutable {
         if (!Inputs)
           return CB(Inputs.takeError());
@@ -778,7 +778,8 @@ void ClangdServer::changeSignature(PathRef File, Position Pos,
               "The source document changed. Start Change Signature again."));
         return CB(clangd::changeSignature(
             Inputs->AST, Inputs->Inputs, CDB, *DirtyFS, Index, Pos,
-            Answer ? std::optional<llvm::StringRef>(*Answer) : std::nullopt));
+            Answer ? std::optional<llvm::StringRef>(*Answer) : std::nullopt,
+            Force));
       });
 }
 

@@ -416,7 +416,7 @@ public:
                   Callback<CodeActionResult> CB);
 
   void changeSignature(PathRef File, Position Pos, llvm::StringRef Version,
-                       std::optional<std::string> Answer,
+                       std::optional<std::string> Answer, bool Force,
                        Callback<llvm::json::Value> CB);
 
   /// Apply the code tweak with a specified \p ID.

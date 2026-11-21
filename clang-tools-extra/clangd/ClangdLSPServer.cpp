@@ -700,7 +700,9 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
         {"interactiveResolveProvider",
          llvm::json::Object{
              {"kinds", llvm::json::Array{"command"}},
-             {"previewCommands", llvm::json::Array{ChangeSignatureCommand}}}}};
+             {"previewCommands", llvm::json::Array{ChangeSignatureCommand}},
+             {"forcePreviewCommands",
+              llvm::json::Array{ChangeSignatureCommand}}}}};
   ServerCaps["executeCommandProvider"] =
       llvm::json::Object{{"commands", Commands}};
 
@@ -850,8 +852,10 @@ void ClangdLSPServer::onResolveCommand(const llvm::json::Value &Params,
   if (!Target)
     return Reply(Target.takeError());
 
+  const bool Force = Object->getBoolean("force").value_or(false);
   auto Request = *Object;
   Request.erase("formFields");
+  Request.erase("force");
   std::optional<std::string> Answer;
   if (const auto *Answers = Object->getArray("formAnswers");
       Answers && !Answers->empty()) {
@@ -873,7 +877,7 @@ void ClangdLSPServer::onResolveCommand(const llvm::json::Value &Params,
 
   const auto &Position = Target->Position;
   auto Response = [Request = std::move(Request), Reply = std::move(Reply),
-                   Answer,
+                   Answer, Force,
                    Field](llvm::Expected<llvm::json::Value> Changes) mutable {
     if (!Answer) {
       if (!Changes)
@@ -887,11 +891,12 @@ void ClangdLSPServer::onResolveCommand(const llvm::json::Value &Params,
     } else {
       auto *Arg = Request.getArray("arguments")->front().getAsObject();
       (*Arg)["answer"] = *Answer;
+      (*Arg)["force"] = Force;
     }
     Reply(llvm::json::Value(std::move(Request)));
   };
   Server->changeSignature(Position.textDocument.uri.file(), Position.position,
-                          Target->Version, std::move(Answer),
+                          Target->Version, std::move(Answer), Force,
                           std::move(Response));
 }
 
@@ -909,9 +914,10 @@ void ClangdLSPServer::onCommandChangeSignature(
   auto Answer = Arg->getString("answer");
   if (!Answer)
     return Reply(error("Resolve Change Signature before executing it"));
-  Server->changeSignature(Target->Position.textDocument.uri.file(),
-                          Target->Position.position, Target->Version,
-                          Answer->str(), std::move(Reply));
+  Server->changeSignature(
+      Target->Position.textDocument.uri.file(), Target->Position.position,
+      Target->Version, Answer->str(), Arg->getBoolean("force").value_or(false),
+      std::move(Reply));
 }
 
 void ClangdLSPServer::onCommandApplyEdit(const WorkspaceEdit &WE,

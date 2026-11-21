@@ -29,7 +29,7 @@ llvm::Expected<llvm::json::Value>
 changeSignature(ParsedAST &AST, const ParseInputs &Inputs,
                 const GlobalCompilationDatabase &CDB, const ThreadsafeFS &FS,
                 const SymbolIndex *Index, Position Pos,
-                std::optional<llvm::StringRef> Answer);
+                std::optional<llvm::StringRef> Answer, bool Force);
 
 } // namespace clangd
 } // namespace clang
