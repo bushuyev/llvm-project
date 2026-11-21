@@ -1,0 +1,33 @@
+# RUN: clangd -lit-test < %s | FileCheck %s
+{"jsonrpc":"2.0","id":0,"method":"initialize","params":{"rootUri":"test:///","capabilities":{"textDocument":{"codeAction":{"codeActionLiteralSupport":{"codeActionKind":{"valueSet":["refactor.rewrite"]}}}},"experimental":{"interactiveResolve":{"inputTypes":["string"],"workspaceEditPreview":true}}}}}
+# CHECK: "experimental": {
+# CHECK-NEXT: "interactiveResolveProvider": {
+# CHECK: "refactor.changeSignature"
+---
+{"jsonrpc":"2.0","method":"textDocument/didOpen","params":{"textDocument":{"uri":"test:///main.cpp","languageId":"cpp","version":1,"text":"int calculate(int x, int y) { return x-y; }\nint main() { return calculate(10, 3); }\n"}}}
+---
+{"jsonrpc":"2.0","id":1,"method":"textDocument/codeAction","params":{"textDocument":{"uri":"test:///main.cpp"},"range":{"start":{"line":0,"character":4},"end":{"line":0,"character":4}},"context":{"diagnostics":[],"only":["refactor.rewrite"]}}}
+# CHECK: "id": 1,
+# CHECK: "command": "refactor.changeSignature",
+# CHECK: "kind": "refactor.rewrite",
+# CHECK-NEXT: "title": "Change Signature"
+---
+{"jsonrpc":"2.0","id":2,"method":"command/resolve","params":{"command":"refactor.changeSignature","arguments":[{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":0,"character":4},"version":"1"}]}}
+# CHECK: "id": 2,
+# CHECK: "formFields": [
+# CHECK: "id": "signature",
+---
+{"jsonrpc":"2.0","id":3,"method":"workspace/executeCommand","params":{"command":"refactor.changeSignature","arguments":[{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":0,"character":4},"version":"1","answer":"{\"name\":\"calculate\",\"returnType\":\"int\",\"parameters\":[{\"oldIndex\":1,\"name\":\"y\",\"type\":\"int\"},{\"oldIndex\":0,\"name\":\"x\",\"type\":\"int\"}]}"}]}}
+# CHECK: "id": 3,
+# CHECK: "newText": "(int y, int x)",
+# CHECK: "newText": "3, 10",
+# CHECK: "originals": {
+# CHECK: "int calculate(int x, int y)
+---
+{"jsonrpc":"2.0","id":4,"method":"command/resolve","params":{"command":"refactor.changeSignature","arguments":[{"textDocument":{"uri":"test:///main.cpp"},"position":{"line":0,"character":4},"version":"1"}],"formAnswers":[{"id":"signature","value":"{\"name\":\"calculate\",\"returnType\":\"int\",\"parameters\":[]}"}]}}
+# CHECK: "id": 4,
+# CHECK: "error": "Cannot remove a parameter used in a function body",
+---
+{"jsonrpc":"2.0","id":5,"method":"shutdown"}
+---
+{"jsonrpc":"2.0","method":"exit"}

@@ -489,6 +489,9 @@ static std::vector<llvm::StringRef> semanticTokenModifiers() {
   return Modifiers;
 }
 
+static constexpr llvm::StringLiteral ChangeSignatureCommand =
+    "refactor.changeSignature";
+
 void ClangdLSPServer::onInitialize(const InitializeParams &Params,
                                    Callback<llvm::json::Value> Reply) {
   // Determine character encoding first as it affects constructed ClangdServer.
@@ -532,6 +535,16 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
     SupportedCompletionItemKinds |= *Params.capabilities.CompletionItemKinds;
   SupportsCompletionLabelDetails = Params.capabilities.CompletionLabelDetail;
   SupportsCodeAction = Params.capabilities.CodeActionStructure;
+  if (const auto *Experimental =
+          Params.rawCapabilities.getObject("experimental"))
+    if (const auto *Interactive = Experimental->getObject("interactiveResolve"))
+      if (const auto *Kinds = Interactive->getArray("inputTypes"))
+        SupportsChangeSignature =
+            SupportsCodeAction &&
+            Interactive->getBoolean("workspaceEditPreview").value_or(false) &&
+            llvm::any_of(*Kinds, [](const llvm::json::Value &Kind) {
+              return Kind.getAsString() == "string";
+            });
   SupportsHierarchicalDocumentSymbol =
       Params.capabilities.HierarchicalDocumentSymbol;
   SupportsReferenceContainer = Params.capabilities.ReferenceContainer;
@@ -682,6 +695,12 @@ void ClangdLSPServer::onInitialize(const InitializeParams &Params,
   for (llvm::StringRef Command : Handlers.CommandHandlers.keys())
     Commands.push_back(Command);
   llvm::sort(Commands);
+  if (SupportsChangeSignature)
+    ServerCaps["experimental"] = llvm::json::Object{
+        {"interactiveResolveProvider",
+         llvm::json::Object{
+             {"kinds", llvm::json::Array{"command"}},
+             {"previewCommands", llvm::json::Array{ChangeSignatureCommand}}}}};
   ServerCaps["executeCommandProvider"] =
       llvm::json::Object{{"commands", Commands}};
 
@@ -790,6 +809,109 @@ void ClangdLSPServer::onCommand(const ExecuteCommandParams &Params,
         ErrorCode::InvalidParams));
   }
   It->second(Params.argument, std::move(Reply));
+}
+
+namespace {
+
+struct SignatureCommandTarget {
+  TextDocumentPositionParams Position;
+  std::string Version;
+};
+
+llvm::Expected<SignatureCommandTarget>
+signatureCommandTarget(const llvm::json::Object &Arg) {
+  auto Version = Arg.getString("version");
+  TextDocumentPositionParams Position;
+  const auto *Document = Arg.get("textDocument");
+  const auto *Cursor = Arg.get("position");
+  llvm::json::Path::Root Root;
+  if (!Version || !Document || !Cursor ||
+      !fromJSON(*Document, Position.textDocument, Root) ||
+      !fromJSON(*Cursor, Position.position, Root))
+    return error("Invalid Change Signature target");
+  return SignatureCommandTarget{std::move(Position), Version->str()};
+}
+} // namespace
+
+void ClangdLSPServer::onResolveCommand(const llvm::json::Value &Params,
+                                       Callback<llvm::json::Value> Reply) {
+  const auto *Object = Params.getAsObject();
+  if (!Object)
+    return Reply(error("Expected interactive command object"));
+  if (Object->getString("command") != ChangeSignatureCommand)
+    return Reply(Params);
+  if (!SupportsChangeSignature)
+    return Reply(
+        error("Client does not support safe Change Signature preview"));
+  const auto *Arguments = Object->getArray("arguments");
+  if (!Arguments || Arguments->size() != 1 || !Arguments->front().getAsObject())
+    return Reply(error("Missing Change Signature arguments"));
+  auto Target = signatureCommandTarget(*Arguments->front().getAsObject());
+  if (!Target)
+    return Reply(Target.takeError());
+
+  auto Request = *Object;
+  Request.erase("formFields");
+  std::optional<std::string> Answer;
+  if (const auto *Answers = Object->getArray("formAnswers");
+      Answers && !Answers->empty()) {
+    const auto *Field = Answers->front().getAsObject();
+    if (Answers->size() != 1 || !Field ||
+        Field->getString("id") != "signature" || !Field->getString("value"))
+      return Reply(error("Expected one signature answer containing JSON text"));
+    Answer = Field->getString("value")->str();
+  }
+  auto Field = [](std::string Default) -> llvm::json::Object {
+    return llvm::json::Object{
+        {"id", "signature"},
+        {"type", llvm::json::Object{{"kind", "string"}}},
+        {"description", "Edit the ordered parameters. Keep each oldIndex, or "
+                        "use null and supply an argument for a new parameter."},
+        {"required", true},
+        {"default", std::move(Default)}};
+  };
+
+  const auto &Position = Target->Position;
+  auto Response = [Request = std::move(Request), Reply = std::move(Reply),
+                   Answer,
+                   Field](llvm::Expected<llvm::json::Value> Changes) mutable {
+    if (!Answer) {
+      if (!Changes)
+        return Reply(Changes.takeError());
+      Request["formFields"] =
+          llvm::json::Array{Field(llvm::formatv("{0:2}", *Changes).str())};
+    } else if (!Changes) {
+      auto Form = Field(*Answer);
+      Form["error"] = llvm::toString(Changes.takeError());
+      Request["formFields"] = llvm::json::Array{std::move(Form)};
+    } else {
+      auto *Arg = Request.getArray("arguments")->front().getAsObject();
+      (*Arg)["answer"] = *Answer;
+    }
+    Reply(llvm::json::Value(std::move(Request)));
+  };
+  Server->changeSignature(Position.textDocument.uri.file(), Position.position,
+                          Target->Version, std::move(Answer),
+                          std::move(Response));
+}
+
+void ClangdLSPServer::onCommandChangeSignature(
+    const llvm::json::Value &Argument, Callback<llvm::json::Value> Reply) {
+  if (!SupportsChangeSignature)
+    return Reply(
+        error("Client does not support safe Change Signature preview"));
+  const auto *Arg = Argument.getAsObject();
+  if (!Arg)
+    return Reply(error("Missing resolved Change Signature arguments"));
+  auto Target = signatureCommandTarget(*Arg);
+  if (!Target)
+    return Reply(Target.takeError());
+  auto Answer = Arg->getString("answer");
+  if (!Answer)
+    return Reply(error("Resolve Change Signature before executing it"));
+  Server->changeSignature(Target->Position.textDocument.uri.file(),
+                          Target->Position.position, Target->Version,
+                          Answer->str(), std::move(Reply));
 }
 
 void ClangdLSPServer::onCommandApplyEdit(const WorkspaceEdit &WE,
@@ -1081,6 +1203,7 @@ void ClangdLSPServer::onCodeAction(const CodeActionParams &Params,
     }
   }
   Inputs.File = File.file();
+  Inputs.OfferChangeSignature = SupportsChangeSignature;
   Inputs.Selection = Params.range;
   Inputs.RequestedActionKinds = Params.context.only;
   Inputs.TweakFilter = [this](const Tweak &T) {
@@ -1109,6 +1232,21 @@ void ClangdLSPServer::onCodeAction(const CodeActionParams &Params,
 
     for (const auto &TR : Fixits->TweakRefs)
       CAs.push_back(toCodeAction(TR, File, Selection));
+
+    if (Fixits->HasChangeSignature) {
+      CodeAction Action;
+      Action.title = "Change Signature";
+      Action.kind = "refactor.rewrite";
+      Command Command;
+      Command.title = Action.title;
+      Command.command = ChangeSignatureCommand.str();
+      Command.argument = llvm::json::Object{
+          {"textDocument", llvm::json::Object{{"uri", File}}},
+          {"position", Selection.start},
+          {"version", Fixits->Version}};
+      Action.command = std::move(Command);
+      CAs.push_back(std::move(Action));
+    }
 
     // If there's exactly one quick-fix, call it "preferred".
     // We never consider refactorings etc as preferred.
@@ -1731,6 +1869,16 @@ void ClangdLSPServer::bindMethods(LSPBinder &Bind,
   Bind.method("textDocument/inlayHint", this, &ClangdLSPServer::onInlayHint);
   Bind.method("$/memoryUsage", this, &ClangdLSPServer::onMemoryUsage);
   Bind.method("textDocument/foldingRange", this, &ClangdLSPServer::onFoldingRange);
+  if (SupportsChangeSignature) {
+    Handlers.MethodHandlers["command/resolve"] =
+        [this](llvm::json::Value Params, Callback<llvm::json::Value> Reply) {
+          onResolveCommand(Params, std::move(Reply));
+        };
+    Handlers.CommandHandlers[ChangeSignatureCommand] =
+        [this](llvm::json::Value Params, Callback<llvm::json::Value> Reply) {
+          onCommandChangeSignature(Params, std::move(Reply));
+        };
+  }
   Bind.command(ApplyFixCommand, this, &ClangdLSPServer::onCommandApplyEdit);
   Bind.command(ApplyTweakCommand, this, &ClangdLSPServer::onCommandApplyTweak);
   Bind.command(ApplyRenameCommand, this, &ClangdLSPServer::onCommandApplyRename);

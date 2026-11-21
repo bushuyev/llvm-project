@@ -147,6 +147,7 @@ add_clang_library(clangDaemon STATIC
   index/dex/Trigram.cpp
 
   refactor/InsertionPoint.cpp
+  refactor/ChangeSignature.cpp
   refactor/Rename.cpp
   refactor/Tweak.cpp
 

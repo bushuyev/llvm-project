@@ -27,6 +27,7 @@
 #include "index/FileIndex.h"
 #include "index/Merge.h"
 #include "index/StdLib.h"
+#include "refactor/ChangeSignature.h"
 #include "refactor/Rename.h"
 #include "refactor/Tweak.h"
 #include "support/Cancellation.h"
@@ -716,6 +717,9 @@ void ClangdServer::codeAction(const CodeActionInputs &Params,
 
     CodeActionResult Result;
     Result.Version = InpAST->AST.version().str();
+    Result.HasChangeSignature =
+        Params.OfferChangeSignature && KindAllowed("refactor.rewrite") &&
+        signatureTarget(InpAST->AST, Params.Selection.start);
     if (KindAllowed(CodeAction::QUICKFIX_KIND)) {
       auto FindMatchedDiag = [&InpAST](const DiagRef &DR) -> const Diag * {
         for (const auto &Diag : InpAST->AST.getDiagnostics())
@@ -757,6 +761,25 @@ void ClangdServer::codeAction(const CodeActionInputs &Params,
 
   WorkScheduler->runWithAST("codeAction", Params.File, std::move(Action),
                             Transient);
+}
+
+void ClangdServer::changeSignature(PathRef File, Position Pos,
+                                   llvm::StringRef Version,
+                                   std::optional<std::string> Answer,
+                                   Callback<llvm::json::Value> CB) {
+  WorkScheduler->runWithAST(
+      "ChangeSignature", File,
+      [this, Pos, Version = Version.str(), Answer = std::move(Answer),
+       CB = std::move(CB)](llvm::Expected<InputsAndAST> Inputs) mutable {
+        if (!Inputs)
+          return CB(Inputs.takeError());
+        if (Inputs->AST.version() != Version)
+          return CB(error(
+              "The source document changed. Start Change Signature again."));
+        return CB(clangd::changeSignature(
+            Inputs->AST, Inputs->Inputs, CDB, *DirtyFS, Index, Pos,
+            Answer ? std::optional<llvm::StringRef>(*Answer) : std::nullopt));
+      });
 }
 
 void ClangdServer::applyTweak(PathRef File, Range Sel, StringRef TweakID,

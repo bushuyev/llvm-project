@@ -381,6 +381,7 @@ public:
   };
 
   struct CodeActionInputs {
+    bool OfferChangeSignature = false;
     std::string File;
     Range Selection;
 
@@ -394,6 +395,7 @@ public:
     std::function<bool(const Tweak &)> TweakFilter;
   };
   struct CodeActionResult {
+    bool HasChangeSignature = false;
     std::string Version;
     struct QuickFix {
       DiagRef Diag;
@@ -412,6 +414,10 @@ public:
   /// tweaks) for a given range in a file.
   void codeAction(const CodeActionInputs &Inputs,
                   Callback<CodeActionResult> CB);
+
+  void changeSignature(PathRef File, Position Pos, llvm::StringRef Version,
+                       std::optional<std::string> Answer,
+                       Callback<llvm::json::Value> CB);
 
   /// Apply the code tweak with a specified \p ID.
   void applyTweak(PathRef File, Range Sel, StringRef ID,

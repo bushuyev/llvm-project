@@ -183,6 +183,9 @@ private:
   void onCommand(const ExecuteCommandParams &, Callback<llvm::json::Value>);
 
   /// Implement commands.
+  void onResolveCommand(const llvm::json::Value &, Callback<llvm::json::Value>);
+  void onCommandChangeSignature(const llvm::json::Value &,
+                                Callback<llvm::json::Value>);
   void onCommandApplyEdit(const WorkspaceEdit &, Callback<llvm::json::Value>);
   void onCommandApplyTweak(const TweakArgs &, Callback<llvm::json::Value>);
   void onCommandApplyRename(const RenameParams &, Callback<llvm::json::Value>);
@@ -293,6 +296,7 @@ private:
   bool SupportsCompletionLabelDetails = false;
   /// Whether the client supports CodeAction response objects.
   bool SupportsCodeAction = false;
+  bool SupportsChangeSignature = false;
   /// From capabilities of textDocument/documentSymbol.
   bool SupportsHierarchicalDocumentSymbol = false;
   /// Whether the client supports showing file status.
